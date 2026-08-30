@@ -1,18 +1,25 @@
+export const DEFAULT_BACKEND_URL = 'https://letra-y-canto-sync.onrender.com';
+
 /**
- * Resolves the absolute or relative API URL based on VITE_API_URL configuration.
- * - In local dev (same-origin), if VITE_API_URL is unset, it uses the standard relative '/api/*' path.
- * - In remote deployments (Vercel, Capacitor Android APK, etc.), VITE_API_URL points to the live backend server.
+ * Resolves the absolute API URL based on VITE_API_URL or the Render backend.
+ * - Uses import.meta.env.VITE_API_URL if provided.
+ * - Falls back to 'https://letra-y-canto-sync.onrender.com'.
+ * - Normalizes trailing slashes to avoid duplicated slashes in request URLs.
  */
 export function getApiUrl(endpoint: string): string {
-  const rawBaseUrl = (import.meta.env.VITE_API_URL as string | undefined) || '';
+  const rawBaseUrl =
+    (import.meta.env.VITE_API_URL as string | undefined)?.trim() ||
+    DEFAULT_BACKEND_URL;
   const trimmedBase = rawBaseUrl.trim();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
   if (!trimmedBase) {
-    return cleanEndpoint;
+    throw new Error(
+      'Falta la variable de entorno VITE_API_URL. Configure la URL del backend de Render para continuar.'
+    );
   }
 
-  // Remove any trailing slashes from the base URL
+  // Remove trailing slashes from base URL
   const normalizedBase = trimmedBase.replace(/\/+$/, '');
   return `${normalizedBase}${cleanEndpoint}`;
 }
