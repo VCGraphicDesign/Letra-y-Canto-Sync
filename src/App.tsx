@@ -23,6 +23,7 @@ import {
   SyncStatus,
   SyncedWord,
 } from './types';
+import { getApiUrl, parseApiResponse } from './utils/api';
 
 export default function App() {
   const [selectedAudio, setSelectedAudio] = useState<AudioFileInfo | null>(null);
@@ -99,34 +100,41 @@ export default function App() {
       const CHUNK_SIZE = 2 * 1024 * 1024;
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-      // Step 1: Initialize temporary upload session on server
-      const initRes = await fetch('/api/upload/init', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filename: file.name,
-          mimeType: file.type || 'audio/mpeg',
-          totalSize: file.size,
-          totalChunks,
-        }),
-      });
-
-      let initData: any = null;
+      // Step 1: Initialize temporary upload session on backend
+      const initUrl = getApiUrl('/api/upload/init');
+      let initRes: Response;
       try {
-        initData = await initRes.json();
-      } catch (parseErr) {
-        throw new Error(`El servidor respondió con formato no reconocido (${initRes.status})`);
+        initRes = await fetch(initUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            filename: file.name,
+            mimeType: file.type || 'audio/mpeg',
+            totalSize: file.size,
+            totalChunks,
+          }),
+        });
+      } catch (netErr: any) {
+        throw new Error(
+          `No se pudo conectar con el servidor backend (${initUrl}). Verifique la conexión o el valor de VITE_API_URL.`
+        );
       }
 
+      const { data: initData } = await parseApiResponse<{ success?: boolean; sessionId?: string; message?: string }>(
+        initRes,
+        initUrl
+      );
+
       if (!initRes.ok || !initData || !initData.success || !initData.sessionId) {
-        throw new Error(initData?.message || 'Error al iniciar la sesión de subida.');
+        throw new Error(initData?.message || `Error al iniciar la sesión de subida (${initRes.status}).`);
       }
 
       const sessionId = initData.sessionId;
 
       // Step 2: Upload binary chunks sequentially
+      const chunkUrl = getApiUrl('/api/upload/chunk');
       for (let i = 0; i < totalChunks; i++) {
         const start = i * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
@@ -137,56 +145,55 @@ export default function App() {
         formData.append('chunkIndex', i.toString());
         formData.append('chunk', chunkBlob, `chunk_${i}.bin`);
 
-        const chunkRes = await fetch('/api/upload/chunk', {
-          method: 'POST',
-          body: formData,
-        });
-
-        let chunkData: any = null;
+        let chunkRes: Response;
         try {
-          chunkData = await chunkRes.json();
-        } catch (parseErr) {
-          if (chunkRes.status === 413) {
-            throw new Error('El fragmento de audio es demasiado grande.');
-          }
-          throw new Error(`Error en el servidor al subir fragmento (${chunkRes.status})`);
+          chunkRes = await fetch(chunkUrl, {
+            method: 'POST',
+            body: formData,
+          });
+        } catch (netErr: any) {
+          throw new Error(`Error de red al subir el fragmento ${i + 1} de ${totalChunks} a ${chunkUrl}.`);
         }
 
+        const { data: chunkData } = await parseApiResponse<{ success?: boolean; message?: string }>(
+          chunkRes,
+          chunkUrl
+        );
+
         if (!chunkRes.ok || !chunkData || !chunkData.success) {
-          throw new Error(chunkData?.message || `Error al subir el fragmento ${i + 1} de ${totalChunks}.`);
+          throw new Error(chunkData?.message || `Error al subir el fragmento ${i + 1} de ${totalChunks} (${chunkRes.status}).`);
         }
       }
 
       // Step 3: Request transcription using sessionId
-      const response = await fetch('/api/transcribe', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ sessionId }),
-      });
-
-      const responseText = await response.text();
-      let data: any = null;
+      const transcribeUrl = getApiUrl('/api/transcribe');
+      let response: Response;
       try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
-        console.error('Non-JSON response received from /api/transcribe with status:', response.status, 'Body:', responseText.slice(0, 300));
-        if (response.status === 413) {
-          setError({
-            message: 'El archivo de audio es demasiado grande para procesarlo de esta forma.',
-            code: 'file_too_large',
-          });
-        } else {
-          setError({
-            message: 'Ocurrió un error de conexión con el servidor de transcripción.',
-            code: 'network_error',
-            details: `El servidor respondió con formato no reconocido (${response.status}): ${responseText.slice(0, 150)}`,
-          });
-        }
+        response = await fetch(transcribeUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ sessionId }),
+        });
+      } catch (netErr: any) {
+        throw new Error(`Error de red al solicitar la transcripción a ${transcribeUrl}.`);
+      }
+
+      let parsedResult;
+      try {
+        parsedResult = await parseApiResponse<any>(response, transcribeUrl);
+      } catch (parseErr: any) {
+        setError({
+          message: 'Ocurrió un error al procesar la respuesta del servidor.',
+          code: 'network_error',
+          details: parseErr.message,
+        });
         setStatus('error');
         return;
       }
+
+      const data = parsedResult.data;
 
       if (!response.ok || !data || data.success === false) {
         let defaultMsg = 'La canción no pudo ser procesada.';
@@ -202,8 +209,8 @@ export default function App() {
 
         setError({
           message: data?.message || data?.error || defaultMsg,
-          code: data?.error || data?.code || 'gemini_error',
-          details: data?.details,
+          code: data?.error || data?.code || 'transcription_error',
+          details: data?.details || (response.status !== 200 ? `Status HTTP ${response.status} en ${transcribeUrl}` : undefined),
         });
         setStatus('error');
         return;
@@ -336,25 +343,36 @@ export default function App() {
       const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
       // Step 1: Initialize temporary upload session for sync
-      const initRes = await fetch('/api/upload/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          mimeType: file.type || 'audio/mpeg',
-          totalSize: file.size,
-          totalChunks,
-        }),
-      });
+      const initUrl = getApiUrl('/api/upload/init');
+      let initRes: Response;
+      try {
+        initRes = await fetch(initUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: file.name,
+            mimeType: file.type || 'audio/mpeg',
+            totalSize: file.size,
+            totalChunks,
+          }),
+        });
+      } catch (netErr: any) {
+        throw new Error(`No se pudo conectar con el servidor (${initUrl}) para sincronización.`);
+      }
 
-      const initData = await initRes.json();
-      if (!initRes.ok || !initData.success || !initData.sessionId) {
-        throw new Error(initData.message || 'Error al preparar sesión de sincronización.');
+      const { data: initData } = await parseApiResponse<{ success?: boolean; sessionId?: string; message?: string }>(
+        initRes,
+        initUrl
+      );
+
+      if (!initRes.ok || !initData || !initData.success || !initData.sessionId) {
+        throw new Error(initData?.message || `Error al preparar sesión de sincronización (${initRes.status}).`);
       }
 
       const sessionId = initData.sessionId;
 
       // Step 2: Upload chunks
+      const chunkUrl = getApiUrl('/api/upload/chunk');
       for (let i = 0; i < totalChunks; i++) {
         const start = i * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
@@ -365,33 +383,51 @@ export default function App() {
         formData.append('chunkIndex', i.toString());
         formData.append('chunk', chunkBlob, `chunk_${i}.bin`);
 
-        const chunkRes = await fetch('/api/upload/chunk', {
-          method: 'POST',
-          body: formData,
-        });
+        let chunkRes: Response;
+        try {
+          chunkRes = await fetch(chunkUrl, {
+            method: 'POST',
+            body: formData,
+          });
+        } catch (netErr: any) {
+          throw new Error(`Error de red al subir fragmento ${i + 1} para sincronización en ${chunkUrl}.`);
+        }
 
-        const chunkData = await chunkRes.json();
-        if (!chunkRes.ok || !chunkData.success) {
-          throw new Error(chunkData.message || `Error al subir el fragmento ${i + 1} de ${totalChunks}.`);
+        const { data: chunkData } = await parseApiResponse<{ success?: boolean; message?: string }>(
+          chunkRes,
+          chunkUrl
+        );
+
+        if (!chunkRes.ok || !chunkData || !chunkData.success) {
+          throw new Error(chunkData?.message || `Error al subir el fragmento ${i + 1} de ${totalChunks} (${chunkRes.status}).`);
         }
       }
 
       // Step 3: Request forced alignment using the current edited lyrics as ground truth
-      const syncRes = await fetch('/api/sync-lyrics', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          lyrics: targetLyrics,
-        }),
-      });
+      const syncUrl = getApiUrl('/api/sync-lyrics');
+      let syncRes: Response;
+      try {
+        syncRes = await fetch(syncUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId,
+            lyrics: targetLyrics,
+          }),
+        });
+      } catch (netErr: any) {
+        throw new Error(`Error de red al solicitar la sincronización en ${syncUrl}.`);
+      }
 
-      const syncData = await syncRes.json();
+      const { data: syncData } = await parseApiResponse<{ success?: boolean; syncResult?: SyncResult; message?: string }>(
+        syncRes,
+        syncUrl
+      );
 
-      if (!syncRes.ok || !syncData.success || !syncData.syncResult) {
+      if (!syncRes.ok || !syncData || !syncData.success || !syncData.syncResult) {
         throw new Error(
-          syncData.message ||
-            'No se pudo sincronizar la letra con la canción. La transcripción y el PDF no deben verse afectados.'
+          syncData?.message ||
+            `No se pudo sincronizar la letra con la canción (${syncRes.status}). La transcripción y el PDF no deben verse afectados.`
         );
       }
 

@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -16,6 +17,43 @@ dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// Setup CORS to allow cross-origin requests from Vercel frontends, Android Capacitor APKs, and local clients
+const configuredOrigin = process.env.CORS_ORIGIN || process.env.FRONTEND_URL;
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (e.g. mobile native calls, curl, background tasks)
+      if (!origin) return callback(null, true);
+
+      // Explicitly allow Capacitor, localhost, Vercel, and Cloud Run origins
+      if (
+        origin === 'capacitor://localhost' ||
+        origin === 'ionic://localhost' ||
+        origin === 'https://localhost' ||
+        origin === 'http://localhost' ||
+        origin.startsWith('http://localhost:') ||
+        origin.startsWith('https://localhost:') ||
+        origin.endsWith('.vercel.app') ||
+        origin.endsWith('.run.app') ||
+        origin.endsWith('.aistudio.google.com') ||
+        (configuredOrigin && (configuredOrigin === '*' || origin === configuredOrigin))
+      ) {
+        return callback(null, true);
+      }
+
+      // Default permissive callback for mobile / web app connectivity
+      return callback(null, true);
+    },
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    credentials: true,
+  })
+);
+
+// Explicit preflight OPTIONS handler for all endpoints
+app.options('*', cors());
 
 // Setup multer memory storage for chunk uploads
 const chunkStorage = multer.memoryStorage();
