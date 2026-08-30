@@ -436,6 +436,21 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
         <div className="flex items-center gap-2">
           <button
             type="button"
+            id="cantemos-play-btn"
+            onClick={togglePlay}
+            title={isPlaying ? 'Pausar reproducción' : 'Iniciar reproducción'}
+            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-md shadow-amber-500/20 active:scale-95 transition-all"
+          >
+            {isPlaying ? (
+              <Pause className="w-3.5 h-3.5 fill-slate-950" />
+            ) : (
+              <Play className="w-3.5 h-3.5 fill-slate-950 translate-x-0.5" />
+            )}
+            <span>{isPlaying ? 'PAUSA' : 'PLAY'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onReSync}
             disabled={isSyncing}
             title="Volver a sincronizar la letra con el audio"
@@ -670,22 +685,10 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
               type="button"
               onClick={handleRestart}
               title="Reiniciar canción"
-              className="p-2 rounded-xl text-slate-400 hover:text-slate-100 hover:bg-slate-800/80 active:scale-95 transition-all"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-slate-100 bg-slate-900 border border-slate-800 hover:bg-slate-800/80 active:scale-95 transition-all"
             >
-              <RotateCcw className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
-              id="cantemos-play-btn"
-              onClick={togglePlay}
-              className="p-3.5 rounded-full bg-gradient-to-r from-amber-500 to-amber-400 hover:from-amber-400 hover:to-amber-300 text-slate-950 shadow-lg shadow-amber-500/25 active:scale-95 transition-all"
-            >
-              {isPlaying ? (
-                <Pause className="w-5 h-5 fill-slate-950" />
-              ) : (
-                <Play className="w-5 h-5 fill-slate-950 translate-x-0.5" />
-              )}
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Reiniciar</span>
             </button>
           </div>
 

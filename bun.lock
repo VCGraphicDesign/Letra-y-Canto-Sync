@@ -5,6 +5,8 @@
     "": {
       "name": "react-example",
       "dependencies": {
+        "@capacitor/filesystem": "^7.0.0",
+        "@capacitor/share": "^7.0.0",
         "@capacitor/status-bar": "^7.0.0",
         "@google/genai": "^2.4.0",
         "@tailwindcss/vite": "^4.1.14",
@@ -88,7 +90,13 @@
 
     "@capacitor/core": ["@capacitor/core@7.6.8", "", { "dependencies": { "tslib": "^2.1.0" } }, "sha512-x1xfxvNcTSnj6OoYaAB0n0a0HRvi5f2YjcVnMLxpMhbHDgGDAzzN9z8cnPCYV+SKTvqGF1hezHm82Op32XaAGg=="],
 
+    "@capacitor/filesystem": ["@capacitor/filesystem@7.1.8", "", { "dependencies": { "@capacitor/synapse": "^1.0.3" }, "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-Qpw/2SE4/CzqAUvGgSM9hw/uXQ5qoOaF4wxbToXwpAaKPS+tzletS1h5ti3jjLmGcqizTs2sEXMtcsARW/Ceew=="],
+
+    "@capacitor/share": ["@capacitor/share@7.0.4", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-wNXxmXUcChrtbZ5jQv8scFIbIGKo3rk6B7qpWySxfUhYJP5NANgAqQ9Z69m0k/zYsucdh66SBU7XW1ykd9aUug=="],
+
     "@capacitor/status-bar": ["@capacitor/status-bar@7.0.6", "", { "peerDependencies": { "@capacitor/core": ">=7.0.0" } }, "sha512-7AVqj46b26QikImQzWfsJmzG8NUJZBGkrVSuoeTo+SX/YH3hXH0MqwwFgMqMGHfa/BICDgSvTjM9miVFlq0+RQ=="],
+
+    "@capacitor/synapse": ["@capacitor/synapse@1.0.4", "", {}, "sha512-/C1FUo8/OkKuAT4nCIu/34ny9siNHr9qtFezu4kxm6GY1wNFxrCFWjfYx5C1tUhVGz3fxBABegupkpjXvjCHrw=="],
 
     "@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
 

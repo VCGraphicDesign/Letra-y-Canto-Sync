@@ -9,6 +9,7 @@ import {
   RotateCcw,
   FileDown,
 } from 'lucide-react';
+import { downloadOrShareFile } from '../utils/fileDownloader';
 
 interface LyricsDisplayProps {
   lyrics: string;
@@ -39,24 +40,25 @@ export const LyricsDisplay: React.FC<LyricsDisplayProps> = ({
     }
   };
 
-  const handleDownloadTxt = () => {
+  const handleDownloadTxt = async () => {
     const cleanFileName = songTitle
       .replace(/\.[^/.]+$/, '')
       .replace(/[^a-zA-Z0-9_\-]/g, '_')
       .toLowerCase();
+    const fileName = `${cleanFileName || 'letra'}_letra.txt`;
 
-    const blob = new Blob([lyrics], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${cleanFileName || 'letra'}_letra.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    try {
+      await downloadOrShareFile({
+        filename: fileName,
+        content: lyrics,
+        mimeType: 'text/plain',
+      });
+    } catch (err) {
+      console.error('Error al descargar/compartir TXT:', err);
+    }
   };
 
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     const rawSongName = songTitle ? songTitle.replace(/\.[^/.]+$/, '').trim() : '';
     const cleanFileName = rawSongName
       ? rawSongName.replace(/[^a-zA-Z0-9_\-áéíóúñÁÉÍÓÚÑ]/g, '-').replace(/-+/g, '-').toLowerCase()
@@ -127,7 +129,17 @@ export const LyricsDisplay: React.FC<LyricsDisplayProps> = ({
       }
     }
 
-    doc.save(outputFileName);
+    try {
+      const pdfDataUri = doc.output('datauristring');
+      await downloadOrShareFile({
+        filename: outputFileName,
+        content: pdfDataUri,
+        mimeType: 'application/pdf',
+        isBase64: true,
+      });
+    } catch (err) {
+      console.error('Error al descargar/compartir PDF:', err);
+    }
   };
 
   const lineCount = lyrics.split('\n').filter((l) => l.trim().length > 0).length;

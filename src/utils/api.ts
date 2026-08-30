@@ -1,15 +1,23 @@
-export const DEFAULT_BACKEND_URL = 'https://letra-y-canto-sync.onrender.com';
+export const DEFAULT_BACKEND_URL = 'https://letra-y-canto-sync-1.onrender.com';
+const LEGACY_BACKEND_URL = 'https://letra-y-canto-sync.onrender.com';
 
 /**
  * Resolves the absolute API URL based on VITE_API_URL or the Render backend.
- * - Uses import.meta.env.VITE_API_URL if provided.
- * - Falls back to 'https://letra-y-canto-sync.onrender.com'.
+ * - Uses import.meta.env.VITE_API_URL if provided and valid.
+ * - Automatically overrides the legacy domain ('letra-y-canto-sync.onrender.com') with the active domain ('letra-y-canto-sync-1.onrender.com').
+ * - Falls back to 'https://letra-y-canto-sync-1.onrender.com'.
  * - Normalizes trailing slashes to avoid duplicated slashes in request URLs.
  */
 export function getApiUrl(endpoint: string): string {
-  const rawBaseUrl =
+  let rawBaseUrl =
     (import.meta.env.VITE_API_URL as string | undefined)?.trim() ||
     DEFAULT_BACKEND_URL;
+
+  // Intercept and sanitize any outdated/stale environment variable still pointing to the legacy domain
+  if (rawBaseUrl.includes(LEGACY_BACKEND_URL) || rawBaseUrl === 'https://letra-y-canto-sync.onrender.com') {
+    rawBaseUrl = DEFAULT_BACKEND_URL;
+  }
+
   const trimmedBase = rawBaseUrl.trim();
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
 
