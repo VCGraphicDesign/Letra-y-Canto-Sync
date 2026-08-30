@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mic2, Music, Sparkles } from 'lucide-react';
+import { Mic2 } from 'lucide-react';
 
 export const Header: React.FC = () => {
   return (
@@ -11,19 +11,15 @@ export const Header: React.FC = () => {
           </div>
           <div>
             <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
-              LETRA Y CANTO SYNC
+              VCL Letra y Canto Sync
             </h1>
             <p className="text-xs text-slate-400 hidden sm:block">
               Transcripción y sincronización vocal en tiempo real
             </p>
           </div>
         </div>
-
-        <div className="flex items-center gap-2 text-xs font-medium text-slate-400 bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800">
-          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-          <span className="text-slate-300">Gemini 3.7 Flash Audio AI</span>
-        </div>
       </div>
     </header>
   );
 };
+
