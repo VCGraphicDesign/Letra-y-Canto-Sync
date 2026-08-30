@@ -1,0 +1,6 @@
+{
+  "name": "LETRA Y CANTO SYNC",
+  "description": "Transcripción y sincronización vocal en tiempo real",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
