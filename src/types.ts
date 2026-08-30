@@ -31,6 +31,15 @@ export interface SyncedLine {
   words: SyncedWord[];
 }
 
+export interface LyricLine {
+  words: SyncedWord[];
+  start: number;
+  end: number;
+  sectionBreak: boolean;
+  lineIndex?: number;
+  text?: string;
+}
+
 export interface SyncResult {
   durationSeconds: number;
   words: SyncedWord[];

@@ -16,7 +16,7 @@ import {
   AlertCircle,
   Eye,
 } from 'lucide-react';
-import { AudioFileInfo, SyncResult, SyncedWord, SyncedLine } from '../types';
+import { AudioFileInfo, SyncResult, SyncedWord, SyncedLine, LyricLine } from '../types';
 
 interface SyncedLyricsPlayerProps {
   audioInfo: AudioFileInfo;
@@ -55,24 +55,73 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
     return currentLyrics.trim() !== syncResult.syncedLyricsText.trim();
   }, [currentLyrics, syncResult.syncedLyricsText]);
 
-  // Group words into musical lyric lines and sections based on natural phrasing, pauses, and punctuation
-  const linesToRender = useMemo(() => {
-    // If pre-built lines were explicitly provided
-    if (syncResult.lines && syncResult.lines.length > 0) {
+  // Group existing SyncedWord objects into structured LyricLine[] presentation models
+  const linesToRender = useMemo<LyricLine[]>(() => {
+    // Priority 1: Reuse pre-built lines if they were explicitly provided with words
+    if (syncResult.lines && syncResult.lines.length > 0 && syncResult.lines.some((l) => l.words && l.words.length > 0)) {
       return syncResult.lines.map((l, idx) => {
         const prevLine = idx > 0 ? syncResult.lines![idx - 1] : null;
         const pause = prevLine ? Math.max(0, l.start - prevLine.end) : 0;
         return {
-          ...l,
-          isSectionStart: idx === 0 ? false : pause >= 1.8,
+          words: l.words,
+          start: l.start,
+          end: l.end,
+          lineIndex: l.lineIndex ?? idx,
+          text: l.text,
+          sectionBreak: idx === 0 ? false : pause >= 1.6,
         };
       });
     }
 
-    // Musical phrase grouping layer around SyncedWord data (never alters word text, order, or timestamps)
+    // Priority 2 & 3: Group existing SyncedWord collection into presentation-only LyricLine[]
     if (syncResult.words && syncResult.words.length > 0) {
       const words = syncResult.words;
-      const structuredLines: (SyncedLine & { isSectionStart?: boolean })[] = [];
+
+      // Check if words already have distinct multi-line index groupings from existing alignment
+      const uniqueLineIndices = new Set(words.map((w) => w.lineIndex).filter((idx) => typeof idx === 'number'));
+      if (uniqueLineIndices.size > 1) {
+        const lineGroups = new Map<number, SyncedWord[]>();
+        for (const w of words) {
+          const lIdx = typeof w.lineIndex === 'number' ? w.lineIndex : 0;
+          if (!lineGroups.has(lIdx)) {
+            lineGroups.set(lIdx, []);
+          }
+          lineGroups.get(lIdx)!.push(w);
+        }
+
+        const sortedKeys = Array.from(lineGroups.keys()).sort((a, b) => a - b);
+        const structuredLines: LyricLine[] = [];
+
+        sortedKeys.forEach((key, kIdx) => {
+          const lineWords = lineGroups.get(key)!;
+          if (lineWords.length === 0) return;
+
+          const start = lineWords[0].start;
+          const end = lineWords[lineWords.length - 1].end;
+          const text = lineWords.map((cw) => cw.word).join(' ');
+
+          const prevLine = structuredLines.length > 0 ? structuredLines[structuredLines.length - 1] : null;
+          const pause = prevLine ? Math.max(0, start - prevLine.end) : 0;
+          const hasIndexGap = prevLine && key > sortedKeys[kIdx - 1] + 1;
+          const sectionBreak = structuredLines.length === 0 ? false : pause >= 1.6 || !!hasIndexGap;
+
+          structuredLines.push({
+            words: lineWords,
+            start,
+            end,
+            sectionBreak,
+            lineIndex: structuredLines.length,
+            text,
+          });
+        });
+
+        if (structuredLines.length > 0) {
+          return structuredLines;
+        }
+      }
+
+      // Priority 3: Create presentation-only phrase groups from the existing ordered SyncedWord stream based on natural sung phrase boundaries
+      const structuredLines: LyricLine[] = [];
       let currentLineWords: SyncedWord[] = [];
       let wasNewSection = false;
 
@@ -88,25 +137,24 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
         const hasSentencePunctuation = /[.!?…¿¡]$/.test(cleanWord);
         const hasPhrasePunctuation = /[,;:\-—"]$/.test(cleanWord);
 
-        const isSectionPause = pause >= 1.8;
-        const isLongPause = pause >= 0.55;
-        const isPunctuatedSentencePause = hasSentencePunctuation && pause >= 0.25;
-        const isPunctuatedPhrasePause = hasPhrasePunctuation && pause >= 0.35;
-        const isMidLinePunctuationPause = hasPhrasePunctuation && currentLineWords.length >= 4 && pause >= 0.2;
-        const isLineLengthSoftPause = currentLineWords.length >= 6 && pause >= 0.3;
-        const isLineLengthLimit = currentLineWords.length >= 9 && (pause >= 0.18 || hasPhrasePunctuation);
-        const isHardLineLimit = currentLineWords.length >= 12;
+        // Musical phrase boundary indicators
+        const isSectionPause = pause >= 1.6; // Clear boundary between stanzas/sections
+        const isVocalRestPause = pause >= 0.45; // Singer breathing / musical rest between phrases
+        const isPunctuatedSentencePause = hasSentencePunctuation && (pause >= 0.2 || currentLineWords.length >= 3);
+        const isPunctuatedPhrasePause = hasPhrasePunctuation && (pause >= 0.25 || currentLineWords.length >= 4);
+        const isLineCadenceLength = currentLineWords.length >= 6 && pause >= 0.22;
+        const isPhraseLimit = currentLineWords.length >= 8 && (pause >= 0.15 || hasPhrasePunctuation);
+        const isHardPhraseLimit = currentLineWords.length >= 10; // Cap at natural lyric line length
 
         const shouldBreak =
           isLastWord ||
           isSectionPause ||
-          isLongPause ||
+          isVocalRestPause ||
           isPunctuatedSentencePause ||
           isPunctuatedPhrasePause ||
-          isMidLinePunctuationPause ||
-          isLineLengthSoftPause ||
-          isLineLengthLimit ||
-          isHardLineLimit;
+          isLineCadenceLength ||
+          isPhraseLimit ||
+          isHardPhraseLimit;
 
         if (shouldBreak) {
           const start = currentLineWords[0].start;
@@ -114,12 +162,12 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
           const text = currentLineWords.map((cw) => cw.word).join(' ');
 
           structuredLines.push({
-            lineIndex: structuredLines.length,
-            text,
+            words: [...currentLineWords],
             start,
             end,
-            words: [...currentLineWords],
-            isSectionStart: structuredLines.length === 0 ? false : wasNewSection,
+            sectionBreak: structuredLines.length === 0 ? false : wasNewSection,
+            lineIndex: structuredLines.length,
+            text,
           });
 
           currentLineWords = [];
@@ -130,9 +178,9 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
       return structuredLines;
     }
 
-    // Fallback: build lines from raw currentLyrics
+    // Fallback: build lines from raw currentLyrics if no word timestamps are available
     const rawLines = currentLyrics.split('\n');
-    const result: (SyncedLine & { isSectionStart?: boolean })[] = [];
+    const result: LyricLine[] = [];
     let isNextSection = false;
 
     for (let idx = 0; idx < rawLines.length; idx++) {
@@ -142,12 +190,12 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
         continue;
       }
       result.push({
-        lineIndex: result.length,
-        text: raw,
+        words: [],
         start: idx * 3,
         end: (idx + 1) * 3,
-        words: [],
-        isSectionStart: isNextSection,
+        sectionBreak: isNextSection,
+        lineIndex: result.length,
+        text: raw,
       });
       isNextSection = false;
     }
@@ -452,27 +500,30 @@ export const SyncedLyricsPlayer: React.FC<SyncedLyricsPlayerProps> = ({
 
             return (
               <React.Fragment key={`line-frag-${lIdx}`}>
-                {/* Section Spacing & Subtle Musical Divider for section transitions */}
-                {line.isSectionStart && lIdx > 0 && (
-                  <div key={`section-gap-${lIdx}`} className="pt-8 sm:pt-10 pb-2 flex items-center justify-center">
-                    <div className="w-12 h-0.5 bg-gradient-to-r from-transparent via-amber-500/30 to-transparent rounded-full" />
+                {/* Section Spacing & Subtle Musical Divider for lyrical section transitions */}
+                {line.sectionBreak && lIdx > 0 && (
+                  <div key={`section-gap-${lIdx}`} className="pt-6 sm:pt-8 pb-3 mb-[32px] flex items-center justify-center">
+                    <div className="w-16 h-0.5 bg-gradient-to-r from-transparent via-amber-500/40 to-transparent rounded-full" />
                   </div>
                 )}
 
+                {/* Individual Lyric Line Container */}
                 <div
                   key={`line-${lIdx}`}
                   ref={isLineActive ? activeLineRef : null}
                   onClick={() => handleSeekToTimestamp(line.start)}
-                  className={`group transition-all duration-300 py-2.5 sm:py-3.5 my-1 cursor-pointer flex flex-col items-center justify-center text-center ${
+                  role="group"
+                  aria-label={`Línea ${lIdx + 1}`}
+                  className={`group block w-full max-w-[760px] mx-auto text-center mb-[12px] ${line.sectionBreak ? 'mt-[32px]' : ''} leading-[1.4] py-2 sm:py-3 cursor-pointer transition-all duration-300 ${
                     isLineActive
-                      ? 'opacity-100 scale-[1.08] z-10 font-bold'
+                      ? 'opacity-100 scale-[1.06] z-10 font-bold'
                       : isLinePast
-                      ? 'opacity-[0.42] scale-[0.96] hover:opacity-60'
+                      ? 'opacity-[0.40] scale-[0.97] hover:opacity-65'
                       : 'opacity-[0.58] scale-[0.98] hover:opacity-80'
                   }`}
                 >
                   <div
-                    className={`w-full max-w-[760px] mx-auto flex flex-wrap items-center justify-center gap-x-2 sm:gap-x-3 gap-y-1.5 leading-[1.35] tracking-normal text-center transition-all duration-200 ${
+                    className={`w-full max-w-[760px] mx-auto flex flex-wrap items-center justify-center gap-x-2 sm:gap-x-3 gap-y-1 text-center transition-all duration-200 ${
                       fontSize === 'normal'
                         ? 'text-lg sm:text-xl md:text-2xl'
                         : fontSize === 'large'

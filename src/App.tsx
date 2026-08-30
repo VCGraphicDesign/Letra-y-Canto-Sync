@@ -1,4 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar, Style } from '@capacitor/status-bar';
 import {
   Mic,
   Sparkles,
@@ -19,6 +21,7 @@ import {
   TranscriptionError,
   SyncResult,
   SyncStatus,
+  SyncedWord,
 } from './types';
 
 export default function App() {
@@ -33,6 +36,15 @@ export default function App() {
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'lyrics' | 'cantemos'>('lyrics');
+
+  // Configure Android native status-bar insets & styling
+  useEffect(() => {
+    if (Capacitor.isNativePlatform()) {
+      StatusBar.setOverlaysWebView({ overlay: false }).catch(() => {});
+      StatusBar.setBackgroundColor({ color: '#020617' }).catch(() => {});
+      StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
+    }
+  }, []);
 
   const handleFileSelected = (fileInfo: AudioFileInfo) => {
     // If previously created an object url and selecting a different file, revoke old one
@@ -233,11 +245,83 @@ export default function App() {
     }
   };
 
-  const handleResetLyrics = () => {
-    setTranscribedLyrics(originalTranscribedLyrics);
+  // Helper to update SyncedWord text values from edited lyrics while strictly preserving original start and end timestamps
+  const applyEditedLyricsToSyncResult = (
+    currentSyncResult: SyncResult | null,
+    editedText: string,
+    totalDuration: number
+  ): SyncResult => {
+    const lines = editedText.split('\n');
+    const originalWords = currentSyncResult?.words || [];
+    const updatedWords: SyncedWord[] = [];
+    let origIdx = 0;
+    let lineIdx = 0;
+
+    for (let l = 0; l < lines.length; l++) {
+      const lineText = lines[l].trim();
+      if (!lineText) continue;
+
+      const lineWordTokens = lineText.split(/\s+/).filter(Boolean);
+      for (let w = 0; w < lineWordTokens.length; w++) {
+        const token = lineWordTokens[w];
+        if (origIdx < originalWords.length) {
+          const orig = originalWords[origIdx];
+          updatedWords.push({
+            ...orig,
+            word: token,
+            lineIndex: lineIdx,
+          });
+          origIdx++;
+        } else {
+          // Safe timestamp fallback if extra words were added
+          const prev = updatedWords[updatedWords.length - 1];
+          const start = prev ? prev.end + 0.05 : 0;
+          const end = Math.min(start + 0.35, totalDuration || 180);
+          updatedWords.push({
+            word: token,
+            start: Number(start.toFixed(3)),
+            end: Number(end.toFixed(3)),
+            lineIndex: lineIdx,
+          });
+        }
+      }
+      lineIdx++;
+    }
+
+    return {
+      durationSeconds: currentSyncResult?.durationSeconds || totalDuration || 180,
+      words: updatedWords,
+      syncedLyricsText: editedText,
+    };
   };
 
-  // Perform forced alignment for CANTEMOS using current edited lyrics as ground truth
+  const handleResetLyrics = () => {
+    setTranscribedLyrics(originalTranscribedLyrics);
+    try {
+      localStorage.setItem('editedLyrics', originalTranscribedLyrics);
+    } catch (e) {
+      // ignore
+    }
+    if (syncResult) {
+      const updatedSync = applyEditedLyricsToSyncResult(syncResult, originalTranscribedLyrics, selectedAudio?.duration || 0);
+      setSyncResult(updatedSync);
+    }
+  };
+
+  const handleLyricsChange = (updated: string) => {
+    setTranscribedLyrics(updated);
+    try {
+      localStorage.setItem('editedLyrics', updated);
+    } catch (e) {
+      // ignore
+    }
+    if (syncResult) {
+      const updatedSync = applyEditedLyricsToSyncResult(syncResult, updated, selectedAudio?.duration || 0);
+      setSyncResult(updatedSync);
+    }
+  };
+
+  // Perform forced alignment for CANTEMOS only if explicitly requested
   const handlePerformSync = async (customLyrics?: string) => {
     const targetLyrics = (typeof customLyrics === 'string' ? customLyrics : transcribedLyrics).trim();
     if (!selectedAudio || !targetLyrics || syncStatus === 'syncing') return;
@@ -327,11 +411,15 @@ export default function App() {
   const handleOpenCantemos = () => {
     if (!selectedAudio || !transcribedLyrics.trim()) return;
 
-    if (syncResult && syncResult.syncedLyricsText.trim() === transcribedLyrics.trim()) {
-      setActiveTab('cantemos');
+    if (syncResult) {
+      const updatedSync = applyEditedLyricsToSyncResult(syncResult, transcribedLyrics, selectedAudio.duration || 0);
+      setSyncResult(updatedSync);
     } else {
-      handlePerformSync();
+      const defaultSync = applyEditedLyricsToSyncResult(null, transcribedLyrics, selectedAudio.duration || 0);
+      setSyncResult(defaultSync);
+      setSyncStatus('synced');
     }
+    setActiveTab('cantemos');
   };
 
   const hasAudioAndLyrics = !!selectedAudio && !!transcribedLyrics.trim() && status === 'completed';
@@ -509,42 +597,6 @@ export default function App() {
         {/* Section 5: Lyrics & CANTEMOS Area */}
         {status === 'completed' && transcribedLyrics && (
           <section id="lyrics-section" className="space-y-4 animate-in fade-in duration-300">
-            {/* View Switcher Tabs (oculto en la etapa de CANTEMOS/Sincronización) */}
-            {activeTab !== 'cantemos' && syncResult && (
-              <div className="flex items-center justify-center p-1 rounded-xl bg-slate-900 border border-slate-800 max-w-sm mx-auto">
-                <button
-                  type="button"
-                  id="tab-lyrics-btn"
-                  onClick={() => setActiveTab('lyrics')}
-                  disabled={syncStatus === 'syncing'}
-                  className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all ${
-                    activeTab === 'lyrics'
-                      ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                      : 'text-slate-400 hover:text-slate-200 disabled:opacity-50'
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>LETRA &bull; PDF</span>
-                </button>
-                {/* Botón CANTEMOS secundario junto a LETRA · PDF: oculto tras finalizar la transcripción/sincronización */}
-                {status !== 'completed' && (
-                  <button
-                    type="button"
-                    id="tab-cantemos-btn"
-                    onClick={() => setActiveTab('cantemos')}
-                    className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all ${
-                      activeTab === 'cantemos'
-                        ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    <Music className="w-3.5 h-3.5" />
-                    <span>CANTEMOS</span>
-                  </button>
-                )}
-              </div>
-            )}
-
             {/* If in CANTEMOS mode and currently syncing: show ONLY sync state (hide unsynchronized lyrics) */}
             {activeTab === 'cantemos' && syncStatus === 'syncing' ? (
               <div
@@ -584,11 +636,7 @@ export default function App() {
                 lyrics={transcribedLyrics}
                 originalLyrics={originalTranscribedLyrics}
                 songTitle={selectedAudio?.name}
-                isSyncing={syncStatus === 'syncing'}
-                onCantemos={handleOpenCantemos}
-                onChange={(updated) => {
-                  setTranscribedLyrics(updated);
-                }}
+                onChange={handleLyricsChange}
                 onResetToOriginal={handleResetLyrics}
               />
             )}

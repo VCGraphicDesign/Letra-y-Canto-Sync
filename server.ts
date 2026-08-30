@@ -417,14 +417,13 @@ async function callGroqWhisper(
 
   const groqFormData = new FormData();
   groqFormData.append('file', audioBlob, fileNameLabel || 'audio.flac');
-  groqFormData.append('model', 'whisper-large-v3-turbo');
+  groqFormData.append('model', 'whisper-large-v3');
   groqFormData.append('response_format', 'verbose_json');
   groqFormData.append('timestamp_granularities[]', 'word');
   groqFormData.append('timestamp_granularities[]', 'segment');
-  groqFormData.append(
-    'prompt',
-    'Transcribe the exact sung lyrics in their original sung language without translating, completing, or adding commentary. Preserve natural song line breaks and stanzas.'
-  );
+  groqFormData.append('temperature', '0');
+  // NOTE: language parameter is intentionally omitted so Whisper automatically detects
+  // and accurately transcribes Spanish, English, or bilingual Spanish/English content.
 
   const groqResponse = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
@@ -451,6 +450,135 @@ async function callGroqWhisper(
   }
 
   return (await groqResponse.json()) as any;
+}
+
+// Helper to format raw transcribed words and segments into professional song lyric lines and stanzas
+function structureLyricsFromWhisper(
+  words: Array<{ word: string; start: number; end: number }>,
+  segments: Array<{ text: string; start: number; end: number }>,
+  rawFallbackText: string
+): {
+  formattedLyrics: string;
+  syncedWords: Array<{ word: string; start: number; end: number; lineIndex: number }>;
+} {
+  // If word-level timestamps are available, build precise musical phrase lines and stanzas
+  if (Array.isArray(words) && words.length > 0) {
+    const syncedWords: Array<{ word: string; start: number; end: number; lineIndex: number }> = [];
+    const stanzas: string[][] = [];
+    let currentLineWords: Array<{ word: string; start: number; end: number }> = [];
+    let currentStanzaLines: string[] = [];
+
+    for (let i = 0; i < words.length; i++) {
+      const currentWordObj = words[i];
+      const wordStr = (currentWordObj.word || '').trim();
+      if (!wordStr) continue;
+
+      const nextWordObj = i < words.length - 1 ? words[i + 1] : null;
+      const pause = nextWordObj ? Math.max(0, nextWordObj.start - currentWordObj.end) : 0;
+
+      currentLineWords.push({
+        word: wordStr,
+        start: typeof currentWordObj.start === 'number' ? currentWordObj.start : 0,
+        end: typeof currentWordObj.end === 'number' ? currentWordObj.end : 0,
+      });
+
+      const hasSentencePunctuation = /[.!?…¿¡]$/.test(wordStr);
+      const hasPhrasePunctuation = /[,;:\-—"]$/.test(wordStr);
+
+      const isLastWord = i === words.length - 1;
+      const isSectionPause = pause >= 1.6; // Clear stanza break
+      const isVocalRestPause = pause >= 0.45; // Vocal rest between phrases
+      const isPunctuatedSentencePause = hasSentencePunctuation && (pause >= 0.2 || currentLineWords.length >= 3);
+      const isPunctuatedPhrasePause = hasPhrasePunctuation && (pause >= 0.25 || currentLineWords.length >= 4);
+      const isLineCadenceLength = currentLineWords.length >= 6 && pause >= 0.22;
+      const isPhraseLimit = currentLineWords.length >= 8 && (pause >= 0.15 || hasPhrasePunctuation);
+      const isHardPhraseLimit = currentLineWords.length >= 10;
+
+      const shouldBreakLine =
+        isLastWord ||
+        isSectionPause ||
+        isVocalRestPause ||
+        isPunctuatedSentencePause ||
+        isPunctuatedPhrasePause ||
+        isLineCadenceLength ||
+        isPhraseLimit ||
+        isHardPhraseLimit;
+
+      if (shouldBreakLine) {
+        const lineText = currentLineWords.map((w) => w.word).join(' ');
+        const lineIdx = stanzas.reduce((acc, s) => acc + s.length, 0) + currentStanzaLines.length;
+
+        currentLineWords.forEach((cw) => {
+          syncedWords.push({
+            word: cw.word,
+            start: Number(cw.start.toFixed(3)),
+            end: Number(cw.end.toFixed(3)),
+            lineIndex: lineIdx,
+          });
+        });
+
+        currentStanzaLines.push(lineText);
+        currentLineWords = [];
+
+        if (isSectionPause || isLastWord) {
+          if (currentStanzaLines.length > 0) {
+            stanzas.push(currentStanzaLines);
+            currentStanzaLines = [];
+          }
+        }
+      }
+    }
+
+    if (currentStanzaLines.length > 0) {
+      stanzas.push(currentStanzaLines);
+    }
+
+    const formattedLyrics = stanzas.map((stanza) => stanza.join('\n')).join('\n\n');
+
+    return {
+      formattedLyrics: formattedLyrics.trim(),
+      syncedWords,
+    };
+  }
+
+  // Fallback using segments if words are not available
+  if (Array.isArray(segments) && segments.length > 0) {
+    const stanzas: string[][] = [];
+    let currentStanzaLines: string[] = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const text = (seg.text || '').trim();
+      if (!text) continue;
+
+      const nextSeg = i < segments.length - 1 ? segments[i + 1] : null;
+      const pause = nextSeg ? Math.max(0, nextSeg.start - seg.end) : 0;
+
+      currentStanzaLines.push(text);
+
+      if (pause >= 1.6 || i === segments.length - 1) {
+        if (currentStanzaLines.length > 0) {
+          stanzas.push(currentStanzaLines);
+          currentStanzaLines = [];
+        }
+      }
+    }
+
+    if (currentStanzaLines.length > 0) {
+      stanzas.push(currentStanzaLines);
+    }
+
+    const formattedLyrics = stanzas.map((stanza) => stanza.join('\n')).join('\n\n');
+    return {
+      formattedLyrics: formattedLyrics.trim(),
+      syncedWords: [],
+    };
+  }
+
+  return {
+    formattedLyrics: (rawFallbackText || '').trim(),
+    syncedWords: [],
+  };
 }
 
 // Transcription endpoint using Groq Whisper Large V3 Turbo with FLAC compression and chunking fallback
@@ -542,8 +670,7 @@ app.post('/api/transcribe', async (req, res) => {
     const totalDuration = await getAudioDurationSeconds(flacPath);
 
     let formattedLyrics = '';
-    const syncedWords: Array<{ word: string; start: number; end: number; lineIndex: number }> = [];
-    const allLines: string[] = [];
+    let syncedWords: Array<{ word: string; start: number; end: number; lineIndex: number }> = [];
 
     // Step 2: If FLAC file is within the limit, process complete file
     if (flacStats.size <= GROQ_MAX_FILE_SIZE_BYTES) {
@@ -558,108 +685,81 @@ app.post('/api/transcribe', async (req, res) => {
         });
       }
 
-      if (Array.isArray(groqData.segments) && groqData.segments.length > 0) {
-        for (const segment of groqData.segments) {
-          const segText = (segment.text || '').trim();
-          if (segText) {
-            allLines.push(segText);
-          }
-        }
-        formattedLyrics = allLines.join('\n');
-      } else {
-        formattedLyrics = rawText;
-      }
+      const rawWords = Array.isArray(groqData.words) ? groqData.words : [];
+      const rawSegments = Array.isArray(groqData.segments) ? groqData.segments : [];
 
-      if (Array.isArray(groqData.words) && groqData.words.length > 0) {
-        const segments = Array.isArray(groqData.segments) ? groqData.segments : [];
-        groqData.words.forEach((w: any) => {
-          const wordStr = (w.word || '').trim();
-          if (!wordStr) return;
-
-          const start = typeof w.start === 'number' ? Math.max(0, w.start) : 0;
-          const end = typeof w.end === 'number' ? Math.max(start + 0.05, w.end) : start + 0.3;
-
-          let wordLineIdx = 0;
-          for (let sIdx = 0; sIdx < segments.length; sIdx++) {
-            const seg = segments[sIdx];
-            if (start >= seg.start - 0.2 && end <= seg.end + 0.5) {
-              wordLineIdx = sIdx;
-              break;
-            }
-          }
-
-          syncedWords.push({
-            word: wordStr,
-            start: Number(start.toFixed(3)),
-            end: Number(end.toFixed(3)),
-            lineIndex: wordLineIdx,
-          });
-        });
-      }
+      const structured = structureLyricsFromWhisper(rawWords, rawSegments, rawText);
+      formattedLyrics = structured.formattedLyrics;
+      syncedWords = structured.syncedWords;
     } else {
       // Step 3: FLAC file exceeds 24 MB -> Sequential Chunking Fallback
       console.log(`[Groq Transcription]: File size (${(flacStats.size / (1024 * 1024)).toFixed(2)} MB) exceeds 24 MB. Initiating automatic FLAC chunking...`);
 
-      // Chunks of 600 seconds (10 minutes) each (~9-10 MB in 16kHz mono FLAC)
-      const CHUNK_DURATION_SEC = 600;
+      // Chunks of 300 seconds (5 minutes) each with 2-second overlap to prevent clipping boundary words
+      const CHUNK_DURATION_SEC = 300;
+      const OVERLAP_SEC = 2.0;
       const durationToUse = totalDuration > 0 ? totalDuration : Math.ceil(flacStats.size / 32000);
       const numChunks = Math.max(1, Math.ceil(durationToUse / CHUNK_DURATION_SEC));
 
-      let globalLineCounter = 0;
+      const accumulatedWords: Array<{ word: string; start: number; end: number }> = [];
+      const accumulatedSegments: Array<{ text: string; start: number; end: number }> = [];
+      const accumulatedRawTexts: string[] = [];
 
       for (let chunkIdx = 0; chunkIdx < numChunks; chunkIdx++) {
-        const chunkStartTime = chunkIdx * CHUNK_DURATION_SEC;
-        const currentChunkDuration = Math.min(CHUNK_DURATION_SEC, Math.max(1, durationToUse - chunkStartTime));
+        const chunkOffset = chunkIdx > 0 ? Math.max(0, chunkIdx * CHUNK_DURATION_SEC - OVERLAP_SEC) : 0;
+        const currentChunkDuration = Math.min(
+          CHUNK_DURATION_SEC + (chunkIdx > 0 ? OVERLAP_SEC : 0),
+          Math.max(1, durationToUse - chunkOffset)
+        );
         const chunkFlacPath = path.join(sessionDir, `flac_chunk_${chunkIdx}.flac`);
 
         try {
-          await extractAudioChunkFlac(flacPath, chunkFlacPath, chunkStartTime, currentChunkDuration);
+          await extractAudioChunkFlac(flacPath, chunkFlacPath, chunkOffset, currentChunkDuration);
           const chunkData = await callGroqWhisper(chunkFlacPath, groqApiKey, `chunk_${chunkIdx}.flac`);
 
-          // Process segment text
-          if (Array.isArray(chunkData.segments) && chunkData.segments.length > 0) {
-            for (const segment of chunkData.segments) {
-              const segText = (segment.text || '').trim();
-              if (segText) {
-                allLines.push(segText);
-              }
-            }
-          } else if (chunkData.text) {
-            allLines.push(chunkData.text.trim());
+          if (chunkData.text) {
+            accumulatedRawTexts.push(chunkData.text.trim());
           }
 
-          // Process words with global absolute timestamps
-          if (Array.isArray(chunkData.words) && chunkData.words.length > 0) {
-            const chunkSegments = Array.isArray(chunkData.segments) ? chunkData.segments : [];
-            chunkData.words.forEach((w: any) => {
-              const wordStr = (w.word || '').trim();
-              if (!wordStr) return;
+          if (Array.isArray(chunkData.segments) && chunkData.segments.length > 0) {
+            for (const seg of chunkData.segments) {
+              accumulatedSegments.push({
+                text: (seg.text || '').trim(),
+                start: chunkOffset + (typeof seg.start === 'number' ? seg.start : 0),
+                end: chunkOffset + (typeof seg.end === 'number' ? seg.end : 0),
+              });
+            }
+          }
 
+          if (Array.isArray(chunkData.words) && chunkData.words.length > 0) {
+            for (const w of chunkData.words) {
+              const wordStr = (w.word || '').trim();
+              if (!wordStr) continue;
               const relativeStart = typeof w.start === 'number' ? Math.max(0, w.start) : 0;
               const relativeEnd = typeof w.end === 'number' ? Math.max(relativeStart + 0.05, w.end) : relativeStart + 0.3;
 
-              // Absolute timestamps adjusted by chunkStartTime
-              const globalStart = chunkStartTime + relativeStart;
-              const globalEnd = chunkStartTime + relativeEnd;
+              const globalStart = chunkOffset + relativeStart;
+              const globalEnd = chunkOffset + relativeEnd;
 
-              let localLineIdx = 0;
-              for (let sIdx = 0; sIdx < chunkSegments.length; sIdx++) {
-                const seg = chunkSegments[sIdx];
-                if (relativeStart >= seg.start - 0.2 && relativeEnd <= seg.end + 0.5) {
-                  localLineIdx = sIdx;
-                  break;
+              // Only deduplicate boundary-overlap duplicate words at the immediate chunk transition
+              if (chunkIdx > 0 && globalStart <= chunkOffset + OVERLAP_SEC + 0.2) {
+                const isBoundaryDuplicate = accumulatedWords.some(
+                  (prevWord) =>
+                    Math.abs(prevWord.start - globalStart) < 0.45 &&
+                    prevWord.word.toLowerCase().replace(/[^a-záéíóúñü0-9]/gi, '') ===
+                      wordStr.toLowerCase().replace(/[^a-záéíóúñü0-9]/gi, '')
+                );
+                if (isBoundaryDuplicate) {
+                  continue;
                 }
               }
 
-              syncedWords.push({
+              accumulatedWords.push({
                 word: wordStr,
-                start: Number(globalStart.toFixed(3)),
-                end: Number(globalEnd.toFixed(3)),
-                lineIndex: globalLineCounter + localLineIdx,
+                start: globalStart,
+                end: globalEnd,
               });
-            });
-
-            globalLineCounter += Math.max(1, chunkSegments.length);
+            }
           }
         } finally {
           try {
@@ -672,7 +772,13 @@ app.post('/api/transcribe', async (req, res) => {
         }
       }
 
-      formattedLyrics = allLines.join('\n');
+      const structured = structureLyricsFromWhisper(
+        accumulatedWords,
+        accumulatedSegments,
+        accumulatedRawTexts.join('\n')
+      );
+      formattedLyrics = structured.formattedLyrics;
+      syncedWords = structured.syncedWords;
     }
 
     // Clean up temporary converted FLAC file if exists
